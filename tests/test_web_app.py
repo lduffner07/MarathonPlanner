@@ -34,6 +34,7 @@ class AppTest(unittest.TestCase):
         with web_app.connect() as db:
             db.execute('DELETE FROM profile')
             db.execute('DELETE FROM journal')
+            db.execute('DELETE FROM weekly_reviews')
 
     def request(self, path='/', data=None):
         connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port)
@@ -107,6 +108,43 @@ class AppTest(unittest.TestCase):
         self.assertEqual(self.request('/profile',profile)[0],400)
         profile.update(goal_hours=0,goal_minute_part=0)
         self.assertEqual(self.request('/profile',profile)[0],400)
+
+    def test_up_next_advances_after_logging(self):
+        today=dt.date.today()
+        start=today+dt.timedelta(days=7-today.weekday())
+        profile=dict(name='Runner',mileage=50,peak_mileage=70,weeks=16,goal_minutes=215,start_date=start.isoformat(),off_day='Monday',long_run_day='Sunday')
+        self.assertEqual(self.request('/profile',profile)[0],303)
+        first=start+dt.timedelta(days=1)
+        second=start+dt.timedelta(days=2)
+        body=self.request()[1].split('UP NEXT')[1].split('</section>')[0]
+        self.assertIn(f'/?date={first.isoformat()}#journal',body)
+        self.assertEqual(self.request('/journal',dict(date=first.isoformat(),miles=7,minutes=65,effort=6,sleep=8,quality=4,notes='Done'))[0],303)
+        body=self.request()[1].split('UP NEXT')[1].split('</section>')[0]
+        self.assertIn(f'/?date={second.isoformat()}#journal',body)
+
+    def test_calendar_and_saved_weekly_reviews(self):
+        self.assertEqual(self.request('/plan.ics')[0],400)
+        profile=dict(name='Runner',mileage=50,peak_mileage=70,weeks=16,goal_hours=3,goal_minute_part=35,start_date='2026-10-26',off_day='Monday',long_run_day='Sunday')
+        self.assertEqual(self.request('/profile',profile)[0],303)
+        status,calendar=self.request('/plan.ics')
+        self.assertEqual(status,200)
+        unfolded=calendar.replace('\r\n ','')
+        self.assertEqual(unfolded.count('BEGIN:VEVENT'),112)
+        self.assertIn('DTSTART;VALUE=DATE:20261026',unfolded)
+        self.assertIn('DTEND;VALUE=DATE:20261027',unfolded)
+        self.assertIn('SUMMARY:Week 1 · Rest · 0 mi',unfolded)
+        self.assertIn('DESCRIPTION:Rest day',unfolded)
+        for line in calendar.split('\r\n'):
+            self.assertLessEqual(len(line.encode()),75)
+        reflection=dict(week_start='2026-10-26',notes='Strong week <steady>')
+        self.assertEqual(self.request('/weekly-review',reflection)[0],303)
+        self.assertIn('Strong week &lt;steady&gt;',self.request()[1])
+        reflection['notes']='More sleep next week'
+        self.assertEqual(self.request('/weekly-review',reflection)[0],303)
+        backup=json.loads(self.request('/backup.json')[1])
+        self.assertEqual(backup['weekly_reviews'],[dict(week_start='2026-10-26',notes='More sleep next week')])
+        reflection['week_start']='2026-10-27'
+        self.assertEqual(self.request('/weekly-review',reflection)[0],400)
 
     def test_exports_preserve_data_and_escape_spreadsheet_formulas(self):
         self.assertEqual(self.request('/journal',dict(date='2026-10-27',miles=5,minutes=45,effort=6,sleep=7,quality=4,notes='=1+1'))[0],303)

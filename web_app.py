@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 import marathon_planner as planner
+import training_views
 
 DB = Path(os.environ.get('MARATHON_DB', Path(__file__).parent / '.local' / 'training.sqlite3'))
 
@@ -21,6 +22,7 @@ def connect():
     db.row_factory = sqlite3.Row
     db.executescript('''CREATE TABLE IF NOT EXISTS profile (id INTEGER PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS journal (date TEXT PRIMARY KEY, miles REAL NOT NULL, minutes REAL NOT NULL, effort INTEGER NOT NULL, sleep REAL NOT NULL, quality INTEGER NOT NULL, notes TEXT NOT NULL);''')
+    db.execute('CREATE TABLE IF NOT EXISTS weekly_reviews (week_start TEXT PRIMARY KEY, notes TEXT NOT NULL)')
     return db
 
 
@@ -43,6 +45,7 @@ def render(message='', selected_date=None):
     with connect() as db:
         row = db.execute('SELECT data FROM profile WHERE id=1').fetchone()
         logs = db.execute('SELECT * FROM journal ORDER BY date DESC').fetchall()
+        reflections = {row['week_start']: row['notes'] for row in db.execute('SELECT * FROM weekly_reviews')}
     selected_date = selected_date or dt.date.today().isoformat()
     entry = next((dict(log) for log in logs if log['date'] == selected_date), {})
     log_by_date = {log['date']: log for log in logs}
@@ -62,7 +65,10 @@ def render(message='', selected_date=None):
     setup += field('Plan starts on Monday','start_date',p['start_date'],'date')+choices('off_day')+choices('long_run_day')
     setup += '</div><button>Save plan</button><p class="muted">Updating these settings recalculates the plan. Your journal stays saved.</p></form></details>'
     plan_html = '<section><h2>Make a plan, then make it yours.</h2><p>Save your training settings to see your weekly schedule.</p></section>'
+    focus = ''
     if profile:
+        scheduled = training_views.schedule(profile)
+        by_date = {day['date']: day for day in scheduled}
         plan = planner.calculate_weekly_plan(p['mileage'],p['peak_mileage'],p['weeks'])
         start = dt.date.fromisoformat(p['start_date'])
         pace = p['goal_minutes']/26.2
@@ -76,6 +82,13 @@ def render(message='', selected_date=None):
         else:
             phase = f'Week {week_index+1} of {len(plan)} · {plan[week_index]["label"]}'
         plan_html = f'<section><h2>{esc(phase)}</h2><p>Race week: {(start+dt.timedelta(weeks=len(plan)-1)):%b %d, %Y}. Exact race day is not set.</p><div class="fields">'+''.join(f'<div><strong>{esc(workout)}</strong><p>{esc(planner.workout_pace(workout,pace))}</p></div>' for workout in planner.PACE_OFFSETS)+'</div></section>'+plan_html
+        next_day = next((day for day in scheduled if day['date'] >= today and day['workout'] != 'Rest' and day['date'].isoformat() not in log_by_date), None)
+        focus = '<section class="volume"><div class="eyebrow">UP NEXT</div>'
+        if next_day:
+            focus += f'<h2>{next_day["workout"]} · {next_day["miles"]:g} miles</h2><p>{next_day["date"]:%A, %B %d}</p><p>{esc(next_day["description"])}</p><a href="/?date={next_day["date"].isoformat()}#journal">Log this run ↗</a>'
+        else:
+            focus += '<h2>No upcoming unlogged runs</h2><p>Review your journal or set up your next training block.</p>'
+        focus += '<p><a href="/plan.ics">Download workouts to your calendar</a></p><p class="muted">Calendar export is a snapshot. Import it into a separate calendar you can replace when your plan changes.</p></section>'
         chart = '<section class="volume"><div class="eyebrow">THE ROAD TO RACE DAY</div><h2>Your mileage, mapped out.</h2><div class="bars" role="img" aria-label="Weekly mileage: '+esc(', '.join(f'week {w["week"]}: {w["mileage"]} miles' for w in plan))+'">'
         for w in plan:
             height = max(3, w['mileage']/max(p['peak_mileage'],1)*100)
@@ -89,18 +102,25 @@ def render(message='', selected_date=None):
             actual = sum(log['miles'] for log in week_logs)
             progress = min(actual / week['mileage'] * 100, 100) if week['mileage'] else 0
             progress_html = f'<p>{actual:g} miles logged / {week["mileage"]} planned · {len(week_logs)} days recorded (unlogged days are unknown)</p><progress max="100" value="{progress}" aria-label="Weekly mileage completed"></progress>'
+            days = [day for day in scheduled if day['week'] == week['week']]
+            summary = training_views.review(days, log_by_date)
+            review_html = '<h3>Weekly review</h3>'
+            if summary['days']:
+                review_html += f'<p>On {summary["days"]} recorded days: {summary["actual"]:g} miles completed / {summary["planned"]:g} planned. Average sleep: {summary["sleep"]:.1f}h.</p>'
+                if summary['effort'] is not None:
+                    review_html += f'<p>Average run effort: {summary["effort"]:.1f}/10.</p>'
+            else:
+                review_html += '<p>No recorded days for this week yet.</p>'
+            review_html += '<p class="muted">Only recorded dates are compared. These observations do not change your training targets.</p>'
+            review_html += f'<form method="post" action="/weekly-review"><input type="hidden" name="week_start" value="{week_start.isoformat()}"><label>Weekly reflection<textarea name="notes" maxlength="4000" placeholder="What went well? What would you change?">{esc(reflections.get(week_start.isoformat(), ""))}</textarea></label><button>Save weekly reflection</button></form>'
             plan_html += f'<details id="week-{week["week"]}"><summary>Week {week["week"]} · {esc(week["label"])} <span>{week["mileage"]} mi · {week_start:%b %d}</span></summary>{progress_html}<div class="days">'
             for i, day in enumerate(planner.DAYS):
                 date = week_start+dt.timedelta(days=i)
-                if day == p['off_day']:
-                    description='Rest day'
-                else:
-                    workout = 'Long Run' if day == p['long_run_day'] and week['long_run'] is not None else 'Tempo' if day == 'Tuesday' and week['label'] != 'Race Week' and daily[day]>=3 else 'Interval' if day == 'Thursday' and week['label'] != 'Race Week' and daily[day]>=3 else 'Easy'
-                    description = planner.workout_details(workout,week,daily[day],pace)
+                description = by_date[date]['description']
                 logged = log_by_date.get(date.isoformat())
                 result = f'Logged: {logged["miles"]:g} mi · effort {logged["effort"]}/10' if logged else 'Not logged'
                 plan_html += f'<article><strong>{day} · {date:%b %d}</strong><p>{esc(description)}</p><p>{result} · <a href="/?date={date.isoformat()}#journal">Log / edit this day</a></p></article>' 
-            plan_html += '</div></details>'
+            plan_html += '</div>'+review_html+'</details>'
     journal = '<section id="journal"><h2>How did today feel?</h2><p>Log a run or a rest day. Sleep refers to the night before this date. Saving the same date replaces its entry.</p><form method="post" action="/journal"><div class="fields">'
     journal += field('Date','date',selected_date,'date')
     for label,key,value,extra in [('Distance (miles)','miles',0,'min="0" max="300" step="0.01"'),('Run duration (minutes)','minutes',0,'min="0" max="3000" step="0.1"'),('Run effort (1 easy – 10 maximal)','effort',5,'min="1" max="10"'),('Sleep (hours)','sleep',8,'min="0" max="24" step="0.1"'),('Sleep quality (1 poor – 5 great)','quality',3,'min="1" max="5"')]:
@@ -133,7 +153,7 @@ def render(message='', selected_date=None):
 :root{{font-family:system-ui,sans-serif;color:#173b32;background:#f4f5ef}}*{{box-sizing:border-box}}body{{margin:0}}main{{max-width:1100px;margin:auto;padding:32px 20px}}header{{padding:30px 0}}small,.muted{{color:#62766b}}h1{{font-size:clamp(36px,6vw,60px);letter-spacing:-2px;margin:12px 0}}h2{{margin-top:0}}section,details{{background:white;border:1px solid #dce3d9;border-radius:16px;padding:24px;margin:18px 0}}summary{{cursor:pointer;font-weight:650}}summary span{{display:inline-block;margin-left:15px;color:#62766b;font-weight:400}}.fields{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px;margin:20px 0}}label{{display:block;font-size:14px;font-weight:550}}input,select,textarea{{display:block;width:100%;padding:12px;border:1px solid #bfcec3;border-radius:8px;background:#fff;color:#173b32;font:inherit;margin-top:7px}}textarea{{min-height:100px}}button{{background:#244e3e;color:white;border:0;border-radius:8px;padding:13px 22px;font:inherit;margin-top:18px;cursor:pointer}}article{{border-top:1px solid #e3e9df;padding:17px 0}}article:last-child{{padding-bottom:0}}p{{line-height:1.6}}.notice{{padding:16px;background:#e5eddc;border-radius:10px}}.notes{{white-space:pre-wrap}}a{{color:#245d47}}progress{{width:100%;height:14px;accent-color:#244e3e}}.stats{{display:flex;gap:28px;flex-wrap:wrap}}
 
 :root{{color:#edf3f8;background:#0c111b}}body{{background:radial-gradient(ellipse at 90% 0%,#253443 0,transparent 45%),#0c111b}}main{{max-width:1200px}}nav{{display:flex;justify-content:space-between;align-items:center;padding:8px 0 24px;border-bottom:1px solid #34404e}}nav a{{color:#c3f954;text-decoration:none;font-size:13px;font-weight:800}}.brand{{font-size:26px;letter-spacing:3px}}.brand span{{color:#ff8068}}header{{position:relative;padding:55px 0 35px}}header small,.eyebrow{{color:#c3f954;font-size:11px;letter-spacing:3px;font-weight:800}}h1{{font-size:clamp(48px,9vw,100px);line-height:.95;letter-spacing:-4px;font-weight:900;margin:25px 0}}h1 em{{color:#c3f954;font-style:normal}}header>p{{color:#afbdcb;font-size:17px}}.stats{{margin-top:30px;gap:12px}}.stats>*{{border:1px solid #3c4857;border-radius:30px;padding:10px 18px;color:#e8eef6;background:#18222f}}section,details{{background:#161f2b;border-color:#303c4b;border-radius:18px}}h2{{font-size:26px;letter-spacing:-.6px}}.muted,small,summary span{{color:#a4b2c2}}summary{{font-size:17px}}details[open]>summary{{padding-bottom:18px;color:#c3f954}}input,select,textarea{{background:#0e1621;border-color:#435064;color:#edf3f8}}input:focus,select:focus,textarea:focus{{outline:2px solid #c3f954;outline-offset:2px}}label{{color:#b8c5d3}}button{{background:#c3f954;color:#102008;font-weight:800;border-radius:30px}}button:hover{{background:#d8ff8a}}a{{color:#c3f954}}article{{border-color:#354052}}.notice{{background:#263b24;color:#e3ffd0}}progress{{accent-color:#c3f954}}.bars{{display:flex;align-items:stretch;gap:clamp(3px,1vw,12px);height:200px;overflow-x:auto;padding-top:25px}}.bar{{display:flex;flex:1;min-width:18px;flex-direction:column;justify-content:flex-end;text-align:center;text-decoration:none;color:#b7c4d3;font-size:11px}}.bar b{{font-weight:600;margin-bottom:5px}}.bar i{{display:block;min-height:3px;height:var(--height);background:#6c91b3;border-radius:5px 5px 0 0}}.bar.peak i{{background:#c3f954}}.bar.taper i{{background:#ff8caa}}.bar small{{padding-top:8px;font-size:10px}}.bar:hover i{{filter:brightness(1.3)}}.volume{{background:linear-gradient(130deg,#202c3d,#141e2b)}}.eyebrow{{margin-bottom:10px}}footer{{padding:20px 0}}@media(min-width:800px){{.days{{display:grid;grid-template-columns:repeat(2,1fr);gap:0 28px}}}}@media(prefers-reduced-motion:no-preference){{button,a{{transition:filter .15s,background .15s}}html{{scroll-behavior:smooth}}}}@media(max-width:500px){{section,details{{padding:18px}}h1{{letter-spacing:-2px}}.bars{{gap:4px}}}}
-</style><main><nav><a class="brand" href="/">STRIDE<span>↗</span></a><a href="#journal">LOG YOUR RUN ↗</a></nav><header><small>YOUR NEXT FINISH LINE STARTS HERE</small><h1>CHASE THE<br><em>FINISH LINE.</em></h1><p>Big goals. Daily effort. A training plan that moves with you.</p><div class="stats"><strong>{esc(p['name'])}</strong><span>{total:g} miles logged</span><span>{len(logs)} daily entries</span></div></header>{'<p class="notice" role="status">'+esc(message)+'</p>' if message else ''}{setup}{trends}{journal}{plan_html}{history}<footer><p class="muted">Manual logging · Stored locally on this machine · Garmin integration planned</p></footer></main></html>'''
+</style><main><nav><a class="brand" href="/">STRIDE<span>↗</span></a><a href="#journal">LOG YOUR RUN ↗</a></nav><header><small>YOUR NEXT FINISH LINE STARTS HERE</small><h1>CHASE THE<br><em>FINISH LINE.</em></h1><p>Big goals. Daily effort. A training plan that moves with you.</p><div class="stats"><strong>{esc(p['name'])}</strong><span>{total:g} miles logged</span><span>{len(logs)} daily entries</span></div></header>{'<p class="notice" role="status">'+esc(message)+'</p>' if message else ''}{setup}{focus}{trends}{journal}{plan_html}{history}<footer><p class="muted">Manual logging · Stored locally on this machine · Garmin integration planned</p></footer></main></html>'''
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -147,12 +167,27 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         url = urlsplit(self.path)
+        if url.path == '/plan.ics':
+            with connect() as db:
+                row = db.execute('SELECT data FROM profile WHERE id=1').fetchone()
+            if not row:
+                self.page('Save your training plan before exporting workouts.',400)
+                return
+            content = training_views.calendar(json.loads(row[0]))
+            self.send_response(200)
+            self.send_header('Content-Type','text/calendar; charset=utf-8')
+            self.send_header('Content-Disposition','attachment; filename="stride-training.ics"')
+            self.send_header('Content-Length',str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+            return
         if url.path in ('/export.csv', '/backup.json'):
             with connect() as db:
                 logs = [dict(row) for row in db.execute('SELECT * FROM journal ORDER BY date')]
                 profile = db.execute('SELECT data FROM profile WHERE id=1').fetchone()
+                reviews = [dict(row) for row in db.execute('SELECT * FROM weekly_reviews ORDER BY week_start')]
             if url.path == '/backup.json':
-                content = json.dumps(dict(version=1, profile=json.loads(profile[0]) if profile else None, journal=logs), indent=2).encode()
+                content = json.dumps(dict(version=1, profile=json.loads(profile[0]) if profile else None, journal=logs, weekly_reviews=reviews), indent=2).encode()
                 mime, filename = 'application/json', 'marathon-backup.json'
             else:
                 output = io.StringIO(newline='')
@@ -214,6 +249,17 @@ class Handler(BaseHTTPRequestHandler):
                     if not p['name']:
                         raise ValueError('Enter a runner name.')
                     db.execute('INSERT OR REPLACE INTO profile VALUES (1,?)',(json.dumps(p),))
+                elif self.path == '/weekly-review':
+                    date = dt.date.fromisoformat(data['week_start'])
+                    row = db.execute('SELECT data FROM profile WHERE id=1').fetchone()
+                    if not row:
+                        raise ValueError('Save a plan before adding a weekly reflection.')
+                    profile = json.loads(row[0])
+                    start = dt.date.fromisoformat(profile['start_date'])
+                    offset = (date-start).days
+                    if offset < 0 or offset % 7 or offset // 7 >= profile['weeks']:
+                        raise ValueError('Select a week in your training plan.')
+                    db.execute('INSERT OR REPLACE INTO weekly_reviews VALUES (?,?)',(date.isoformat(),data.get('notes','')[:4000]))
                 elif self.path == '/journal':
                     date=dt.date.fromisoformat(data['date']).isoformat()
                     values=[number(data,key,low,high,integer) for key,low,high,integer in [('miles',0,300,False),('minutes',0,3000,False),('effort',1,10,True),('sleep',0,24,False),('quality',1,5,True)]]

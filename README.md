@@ -50,3 +50,9 @@ Enter marathon goal time as separate hours and minutes. Existing saved goals are
 The build follows three build weeks and one down week: weeks 4, 8, 12, etc. reduce volume to 90% of the previous build high. Build targets spread the starting-to-peak increase across the available build weeks, keeping the original 10% growth guard relative to the prior build high (with a one-mile minimum increment for rounding). Recovery weeks do not reset that baseline. Peak week takes priority if it falls on a down-week slot, followed by the three-week taper.
 For a 16-week 50-to-70-mile plan, the totals are 50, 52, 54, 48, 57, 59, 61, 54, 63, 66, 68, 61, 70, 49, 31, 17. The last three weeks remain 70%, 45%, and 25% of peak mileage, rounded down. Race-week mileage excludes the marathon itself. Short plans can still require a jump at peak week; the selected start, peak, and duration should reflect your current training capacity.
 The dashboard includes a weekly mileage chart with peak and taper colors.
+
+### Daily focus, weekly reviews, and calendar export
+
+The **Up next** card shows the next upcoming run without a journal entry. Every week has a **Weekly review** comparing mileage on recorded days, average sleep, and run effort. Write and save a reflection for that week; reflections are tied to the week's Monday date and included in JSON backups. If you change plan dates, reflections remain stored against their original dates.
+
+Use **Download workouts to your calendar** for an `.ics` file compatible with Apple Calendar and other calendar apps. Events are all-day entries, including rest days, with the same descriptions as the web schedule. The export is a snapshot, not live sync or Garmin integration. Import into a separate calendar; replace that calendar when your plan changes to avoid stale or duplicate events. Race-week events contain training mileage only, not an invented race event.
