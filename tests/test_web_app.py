@@ -102,7 +102,7 @@ class AppTest(unittest.TestCase):
         self.assertIn('name="goal_hours" type="number" value="3"',body)
         self.assertIn('name="goal_minute_part" type="number" value="35"',body)
         self.assertIn('Your mileage, mapped out.',body)
-        self.assertIn('Week 3: 60 miles',body)
+        self.assertIn('Week 7: 61 miles',body)
         profile['goal_minute_part']=60
         self.assertEqual(self.request('/profile',profile)[0],400)
         profile.update(goal_hours=0,goal_minute_part=0)

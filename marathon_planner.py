@@ -117,6 +117,11 @@ def calculate_weekly_plan(mileage, peak_mileage, weeks):
     peak_long_run = max(starting_long_run, min(round(peak_mileage * .40), max_long_run))
     long_run = starting_long_run
     peak_week = weeks - 3
+    # Only build weeks advance the mileage baseline. Recovery weeks reduce
+    # volume without making later weeks restart from the reduced baseline.
+    build_weeks = [week for week in range(2, peak_week + 1)
+                   if week % 4 != 0 or week == peak_week]
+    build_step = 0
 
     for week in range(1, weeks + 1):
         if week == weeks - 3:
@@ -139,14 +144,17 @@ def calculate_weekly_plan(mileage, peak_mileage, weeks):
             label = "Starting Mileage"
         else:
             label = "Build Week"
-            # Build from current fitness instead of spreading small increases
-            # over every remaining week. Keep recovery weeks and a peak finish.
-            if week % 4 == 0 and week < peak_week - 1:
+            if week % 4 == 0:
                 label = "Down Week"
                 current = math.floor(highest * .9)
             else:
-                ceiling = max(mileage, peak_mileage - 1)
-                current = min(ceiling, math.floor(current * 1.1))
+                build_step += 1
+                target = round(mileage + (peak_mileage - mileage)
+                               * build_step / len(build_weeks))
+                # Retain the original growth guard, measured from the last
+                # build high so the down week does not erase build progress.
+                increase_limit = highest + max(1, math.floor(highest * .1))
+                current = min(target, increase_limit, peak_mileage)
             highest = max(highest, current)
 
         if week <= peak_week:
