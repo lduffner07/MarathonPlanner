@@ -32,7 +32,7 @@ class LauncherTest(unittest.TestCase):
                 for attempt in range(40):
                     try:
                         with urllib.request.urlopen(f'http://127.0.0.1:{port}/', timeout=1) as response:
-                            self.assertIn('One run at a time.', response.read().decode())
+                            self.assertIn('<title>Stride · Marathon planner</title>', response.read().decode())
                         break
                     except OSError:
                         if process.poll() is not None:

@@ -92,6 +92,22 @@ class AppTest(unittest.TestCase):
         self.assertIn('2 of 7 days recorded · 4 miles logged · average sleep 7.0h',body)
         self.assertIn('Average run effort: 8.0/10 across 1 run days.',body)
 
+    def test_goal_hours_and_minutes_round_trip(self):
+        profile=dict(name='Runner',mileage=50,peak_mileage=70,weeks=16,goal_hours=3,goal_minute_part=35,start_date='2026-10-26',off_day='Monday',long_run_day='Sunday')
+        self.assertEqual(self.request('/profile',profile)[0],303)
+        with web_app.connect() as db:
+            saved=json.loads(db.execute('SELECT data FROM profile').fetchone()[0])
+        self.assertEqual(saved['goal_minutes'],215)
+        body=self.request()[1]
+        self.assertIn('name="goal_hours" type="number" value="3"',body)
+        self.assertIn('name="goal_minute_part" type="number" value="35"',body)
+        self.assertIn('Your mileage, mapped out.',body)
+        self.assertIn('Week 3: 60 miles',body)
+        profile['goal_minute_part']=60
+        self.assertEqual(self.request('/profile',profile)[0],400)
+        profile.update(goal_hours=0,goal_minute_part=0)
+        self.assertEqual(self.request('/profile',profile)[0],400)
+
     def test_exports_preserve_data_and_escape_spreadsheet_formulas(self):
         self.assertEqual(self.request('/journal',dict(date='2026-10-27',miles=5,minutes=45,effort=6,sleep=7,quality=4,notes='=1+1'))[0],303)
         status,body=self.request('/export.csv')

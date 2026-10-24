@@ -123,15 +123,15 @@ def calculate_weekly_plan(mileage, peak_mileage, weeks):
             current = peak_mileage
             label = "Peak Week"
         elif week == weeks - 2:
-            current = math.floor(peak_mileage * .85)
+            current = math.floor(peak_mileage * .70)
             label = "Taper Week 1"
             long_run = round(peak_long_run * .50)
         elif week == weeks - 1:
-            current = math.floor(peak_mileage * .75)
+            current = math.floor(peak_mileage * .45)
             label = "Taper Week 2"
             long_run = round(current * .18)
         elif week == weeks:
-            current = math.floor(peak_mileage * .5)
+            current = math.floor(peak_mileage * .25)
             label = "Race Week"
             long_run = None
         elif week == 1:
@@ -139,20 +139,14 @@ def calculate_weekly_plan(mileage, peak_mileage, weeks):
             label = "Starting Mileage"
         else:
             label = "Build Week"
-            remaining_weeks = peak_week - week
-            remaining_miles = peak_mileage - current
-            needed_increase = remaining_miles / remaining_weeks
-            ten_percent_increase = current * .1
+            # Build from current fitness instead of spreading small increases
+            # over every remaining week. Keep recovery weeks and a peak finish.
             if week % 4 == 0 and week < peak_week - 1:
                 label = "Down Week"
                 current = math.floor(highest * .9)
             else:
-                previous = current
-                guided_increase = needed_increase * 1.5
-                increase = min(ten_percent_increase, guided_increase)
-                current = math.floor(current + increase)
-                if week < peak_week and current >= peak_mileage:
-                    current = math.floor((previous + peak_mileage) / 2)
+                ceiling = max(mileage, peak_mileage - 1)
+                current = min(ceiling, math.floor(current * 1.1))
             highest = max(highest, current)
 
         if week <= peak_week:
@@ -167,6 +161,9 @@ def calculate_weekly_plan(mileage, peak_mileage, weeks):
                 miles_to_peak = peak_long_run - long_run
                 increase = min(2, max(1, round(miles_to_peak / weeks_to_peak)))
                 long_run += min(increase, miles_to_peak)
+
+        if long_run is not None:
+            long_run = min(long_run, current)
 
         plan.append({
             "week": week,

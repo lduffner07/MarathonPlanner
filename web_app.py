@@ -57,7 +57,8 @@ def render(message='', selected_date=None):
     setup += field('Starting miles / week','mileage',p['mileage'],extra='min="1" max="300"')
     setup += field('Peak miles / week','peak_mileage',p['peak_mileage'],extra='min="1" max="300"')
     setup += field('Training weeks','weeks',p['weeks'],extra='min="4" max="104"')
-    setup += field('Marathon goal (minutes)','goal_minutes',p['goal_minutes'],extra='min="60" max="1440"')
+    setup += field('Goal time · hours','goal_hours',p['goal_minutes']//60,extra='min="0" max="24"')
+    setup += field('Goal time · minutes','goal_minute_part',p['goal_minutes']%60,extra='min="0" max="59"')
     setup += field('Plan starts on Monday','start_date',p['start_date'],'date')+choices('off_day')+choices('long_run_day')
     setup += '</div><button>Save plan</button><p class="muted">Updating these settings recalculates the plan. Your journal stays saved.</p></form></details>'
     plan_html = '<section><h2>Make a plan, then make it yours.</h2><p>Save your training settings to see your weekly schedule.</p></section>'
@@ -65,7 +66,7 @@ def render(message='', selected_date=None):
         plan = planner.calculate_weekly_plan(p['mileage'],p['peak_mileage'],p['weeks'])
         start = dt.date.fromisoformat(p['start_date'])
         pace = p['goal_minutes']/26.2
-        plan_html = '<h2>Your training calendar</h2><p class="muted">Your original mileage progression, taper, paces and workouts.</p>'
+        plan_html = '<h2>Your training calendar</h2><p class="muted">Build your base. Find your peak. Arrive fresh. Taper: 70%, 45%, then 25% of peak mileage; race distance is additional.</p>'
         today = dt.date.today()
         week_index = (today-start).days // 7
         if week_index < 0:
@@ -75,6 +76,12 @@ def render(message='', selected_date=None):
         else:
             phase = f'Week {week_index+1} of {len(plan)} · {plan[week_index]["label"]}'
         plan_html = f'<section><h2>{esc(phase)}</h2><p>Race week: {(start+dt.timedelta(weeks=len(plan)-1)):%b %d, %Y}. Exact race day is not set.</p><div class="fields">'+''.join(f'<div><strong>{esc(workout)}</strong><p>{esc(planner.workout_pace(workout,pace))}</p></div>' for workout in planner.PACE_OFFSETS)+'</div></section>'+plan_html
+        chart = '<section class="volume"><div class="eyebrow">THE ROAD TO RACE DAY</div><h2>Your mileage, mapped out.</h2><div class="bars" role="img" aria-label="Weekly mileage: '+esc(', '.join(f'week {w["week"]}: {w["mileage"]} miles' for w in plan))+'">'
+        for w in plan:
+            height = max(3, w['mileage']/max(p['peak_mileage'],1)*100)
+            style = 'taper' if w['week'] > len(plan)-3 else 'peak' if w['label']=='Peak Week' else ''
+            chart += f'<a class="bar {style}" href="#week-{w["week"]}" style="--height:{height}%" title="Week {w["week"]}: {w["mileage"]} miles"><b>{w["mileage"]}</b><i></i><small>{w["week"]}</small></a>'
+        plan_html = chart+'</div><p class="muted">Week number below each bar · lime marks the peak · pink marks the taper</p></section>'+plan_html
         for week in plan:
             daily = planner.allocate_daily_mileage(week,planner.DAYS,p['off_day'],p['long_run_day'])
             week_start = start+dt.timedelta(weeks=week['week']-1)
@@ -82,7 +89,7 @@ def render(message='', selected_date=None):
             actual = sum(log['miles'] for log in week_logs)
             progress = min(actual / week['mileage'] * 100, 100) if week['mileage'] else 0
             progress_html = f'<p>{actual:g} miles logged / {week["mileage"]} planned · {len(week_logs)} days recorded (unlogged days are unknown)</p><progress max="100" value="{progress}" aria-label="Weekly mileage completed"></progress>'
-            plan_html += f'<details><summary>Week {week["week"]} · {esc(week["label"])} <span>{week["mileage"]} mi · {week_start:%b %d}</span></summary>{progress_html}<div class="days">'
+            plan_html += f'<details id="week-{week["week"]}"><summary>Week {week["week"]} · {esc(week["label"])} <span>{week["mileage"]} mi · {week_start:%b %d}</span></summary>{progress_html}<div class="days">'
             for i, day in enumerate(planner.DAYS):
                 date = week_start+dt.timedelta(days=i)
                 if day == p['off_day']:
@@ -124,7 +131,9 @@ def render(message='', selected_date=None):
     total=sum(x['miles'] for x in logs)
     return f'''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Stride · Marathon planner</title><style>
 :root{{font-family:system-ui,sans-serif;color:#173b32;background:#f4f5ef}}*{{box-sizing:border-box}}body{{margin:0}}main{{max-width:1100px;margin:auto;padding:32px 20px}}header{{padding:30px 0}}small,.muted{{color:#62766b}}h1{{font-size:clamp(36px,6vw,60px);letter-spacing:-2px;margin:12px 0}}h2{{margin-top:0}}section,details{{background:white;border:1px solid #dce3d9;border-radius:16px;padding:24px;margin:18px 0}}summary{{cursor:pointer;font-weight:650}}summary span{{display:inline-block;margin-left:15px;color:#62766b;font-weight:400}}.fields{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px;margin:20px 0}}label{{display:block;font-size:14px;font-weight:550}}input,select,textarea{{display:block;width:100%;padding:12px;border:1px solid #bfcec3;border-radius:8px;background:#fff;color:#173b32;font:inherit;margin-top:7px}}textarea{{min-height:100px}}button{{background:#244e3e;color:white;border:0;border-radius:8px;padding:13px 22px;font:inherit;margin-top:18px;cursor:pointer}}article{{border-top:1px solid #e3e9df;padding:17px 0}}article:last-child{{padding-bottom:0}}p{{line-height:1.6}}.notice{{padding:16px;background:#e5eddc;border-radius:10px}}.notes{{white-space:pre-wrap}}a{{color:#245d47}}progress{{width:100%;height:14px;accent-color:#244e3e}}.stats{{display:flex;gap:28px;flex-wrap:wrap}}
-</style><main><header><small>STRIDE / YOUR MARATHON JOURNAL</small><h1>One run at a time.</h1><p>Your plan. Your effort. Your progress.</p><div class="stats"><strong>{esc(p['name'])}</strong><span>{total:g} miles logged</span><span>{len(logs)} daily entries</span></div></header>{'<p class="notice" role="status">'+esc(message)+'</p>' if message else ''}{setup}{trends}{journal}{plan_html}{history}<footer><p class="muted">Manual logging · Stored locally on this machine · Garmin integration planned</p></footer></main></html>'''
+
+:root{{color:#edf3f8;background:#0c111b}}body{{background:radial-gradient(ellipse at 90% 0%,#253443 0,transparent 45%),#0c111b}}main{{max-width:1200px}}nav{{display:flex;justify-content:space-between;align-items:center;padding:8px 0 24px;border-bottom:1px solid #34404e}}nav a{{color:#c3f954;text-decoration:none;font-size:13px;font-weight:800}}.brand{{font-size:26px;letter-spacing:3px}}.brand span{{color:#ff8068}}header{{position:relative;padding:55px 0 35px}}header small,.eyebrow{{color:#c3f954;font-size:11px;letter-spacing:3px;font-weight:800}}h1{{font-size:clamp(48px,9vw,100px);line-height:.95;letter-spacing:-4px;font-weight:900;margin:25px 0}}h1 em{{color:#c3f954;font-style:normal}}header>p{{color:#afbdcb;font-size:17px}}.stats{{margin-top:30px;gap:12px}}.stats>*{{border:1px solid #3c4857;border-radius:30px;padding:10px 18px;color:#e8eef6;background:#18222f}}section,details{{background:#161f2b;border-color:#303c4b;border-radius:18px}}h2{{font-size:26px;letter-spacing:-.6px}}.muted,small,summary span{{color:#a4b2c2}}summary{{font-size:17px}}details[open]>summary{{padding-bottom:18px;color:#c3f954}}input,select,textarea{{background:#0e1621;border-color:#435064;color:#edf3f8}}input:focus,select:focus,textarea:focus{{outline:2px solid #c3f954;outline-offset:2px}}label{{color:#b8c5d3}}button{{background:#c3f954;color:#102008;font-weight:800;border-radius:30px}}button:hover{{background:#d8ff8a}}a{{color:#c3f954}}article{{border-color:#354052}}.notice{{background:#263b24;color:#e3ffd0}}progress{{accent-color:#c3f954}}.bars{{display:flex;align-items:stretch;gap:clamp(3px,1vw,12px);height:200px;overflow-x:auto;padding-top:25px}}.bar{{display:flex;flex:1;min-width:18px;flex-direction:column;justify-content:flex-end;text-align:center;text-decoration:none;color:#b7c4d3;font-size:11px}}.bar b{{font-weight:600;margin-bottom:5px}}.bar i{{display:block;min-height:3px;height:var(--height);background:#6c91b3;border-radius:5px 5px 0 0}}.bar.peak i{{background:#c3f954}}.bar.taper i{{background:#ff8caa}}.bar small{{padding-top:8px;font-size:10px}}.bar:hover i{{filter:brightness(1.3)}}.volume{{background:linear-gradient(130deg,#202c3d,#141e2b)}}.eyebrow{{margin-bottom:10px}}footer{{padding:20px 0}}@media(min-width:800px){{.days{{display:grid;grid-template-columns:repeat(2,1fr);gap:0 28px}}}}@media(prefers-reduced-motion:no-preference){{button,a{{transition:filter .15s,background .15s}}html{{scroll-behavior:smooth}}}}@media(max-width:500px){{section,details{{padding:18px}}h1{{letter-spacing:-2px}}.bars{{gap:4px}}}}
+</style><main><nav><a class="brand" href="/">STRIDE<span>↗</span></a><a href="#journal">LOG YOUR RUN ↗</a></nav><header><small>YOUR NEXT FINISH LINE STARTS HERE</small><h1>CHASE THE<br><em>FINISH LINE.</em></h1><p>Big goals. Daily effort. A training plan that moves with you.</p><div class="stats"><strong>{esc(p['name'])}</strong><span>{total:g} miles logged</span><span>{len(logs)} daily entries</span></div></header>{'<p class="notice" role="status">'+esc(message)+'</p>' if message else ''}{setup}{trends}{journal}{plan_html}{history}<footer><p class="muted">Manual logging · Stored locally on this machine · Garmin integration planned</p></footer></main></html>'''
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -185,7 +194,14 @@ class Handler(BaseHTTPRequestHandler):
             data={k:v[0] for k,v in parse_qs(self.rfile.read(length).decode(),keep_blank_values=True).items()}
             with connect() as db:
                 if self.path == '/profile':
-                    p={key:number(data,key,low,high,True) for key,low,high in [('mileage',1,300),('peak_mileage',1,300),('weeks',4,104),('goal_minutes',60,1440)]}
+                    p={key:number(data,key,low,high,True) for key,low,high in [('mileage',1,300),('peak_mileage',1,300),('weeks',4,104)]}
+                    if 'goal_hours' in data or 'goal_minute_part' in data:
+                        p['goal_minutes'] = number(data,'goal_hours',0,24,True)*60 + number(data,'goal_minute_part',0,59,True)
+                        if not 60 <= p['goal_minutes'] <= 1440:
+                            raise ValueError('Goal time must be between 1 and 24 hours.')
+                    else:
+                        # Preserve compatibility with previously saved total-minute inputs.
+                        p['goal_minutes'] = number(data,'goal_minutes',60,1440,True)
                     if p['peak_mileage'] < p['mileage']:
                         raise ValueError('Peak mileage must be at least starting mileage.')
                     start=dt.date.fromisoformat(data['start_date'])

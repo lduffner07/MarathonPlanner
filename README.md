@@ -43,3 +43,9 @@ Additional features:
 - The last-seven-days summary shows mileage, sleep and effort trends, using only recorded entries and excluding rest days from run-effort averages.
 - Download journal CSV for spreadsheets, or a full JSON backup containing plan settings and journal entries. JSON import is not implemented; retain the SQLite file for direct restoration.
 - A training-phase summary and pace reference support day-to-day planning. Race week is shown without inventing an exact race date.
+
+### Mileage progression and goal time
+
+Enter marathon goal time as separate hours and minutes. Existing saved goals are preserved.
+The build increases mileage by up to 10% from the previous week, with the existing every-fourth-week recovery pattern and a ceiling just below peak until peak week. For a 16-week 50-to-70-mile plan, week 3 reaches 60 miles. The last three weeks use 70%, 45%, and 25% of peak mileage, rounded down (49, 31, 17 miles for a 70-mile peak). Race-week mileage excludes the marathon itself. Short plans can still require a jump at peak week; the selected start, peak, and duration should reflect your current training capacity.
+The dashboard includes a weekly mileage chart with peak and taper colors.
